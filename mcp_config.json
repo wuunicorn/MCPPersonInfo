@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "person-info": {
+      "command": "python3",
+      "args": ["/Users/wuguangxin/Documents/个人工具/MCPDocument/person_info_mcp.py"],
+      "env": {
+        "PYTHONPATH": "/Users/wuguangxin/Documents/个人工具/MCPDocument"
+      }
+    }
+  }
+}
