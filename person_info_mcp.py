@@ -10,6 +10,11 @@ import sys
 import os
 from datetime import datetime
 from typing import Dict, List, Optional
+try:
+    from pypinyin import pinyin, Style
+    PYPINYIN_AVAILABLE = True
+except ImportError:
+    PYPINYIN_AVAILABLE = False
 
 # 数据存储文件路径
 DATA_FILE = os.path.join(os.path.dirname(__file__), "person_data.json")
@@ -112,6 +117,135 @@ class PersonInfoManager:
                 return {"success": False, "error": f"未找到姓名为 '{name}' 的信息"}
         except Exception as e:
             return {"success": False, "error": f"查询失败: {str(e)}"}
+
+    def search_persons(self, query: str, search_type: str = "fuzzy") -> Dict:
+        """模糊搜索个人信息
+        支持前两个字匹配、后两个字匹配、拼音匹配
+        """
+        try:
+            if not query or query.strip() == "":
+                return {"success": False, "error": "查询内容不能为空"}
+
+            matches = []
+
+            # 确保查询字符串长度至少为2个字符
+            if len(query.strip()) < 2:
+                return {"success": False, "error": "查询内容至少需要2个字符"}
+
+            query_clean = query.strip()
+            query_pinyin = self._get_pinyin(query_clean).lower() if PYPINYIN_AVAILABLE else ""
+
+            for name, person_data in self.persons.items():
+                is_match = False
+                match_type = ""
+
+                # 检查是否包含中文字符
+                has_chinese = any(self._is_chinese_char(char) for char in name)
+
+                # 前两个字匹配
+                if len(name) >= 2 and len(query_clean) >= 2:
+                    if name.startswith(query_clean[:2]):
+                        is_match = True
+                        match_type = "前两个字匹配"
+
+                # 后两个字匹配
+                if not is_match and len(name) >= 2 and len(query_clean) >= 2:
+                    if name.endswith(query_clean[-2:]):
+                        is_match = True
+                        match_type = "后两个字匹配"
+
+                # 完全匹配（作为备选）
+                if not is_match and query_clean in name:
+                    is_match = True
+                    match_type = "包含匹配"
+
+                # 拼音匹配（如果有中文且pypinyin可用）
+                if not is_match and has_chinese and PYPINYIN_AVAILABLE and query_pinyin:
+                    name_pinyin = self._get_pinyin(name)
+
+                    # 拼音前两个字匹配
+                    if len(name_pinyin) >= 2 and len(query_pinyin) >= 2:
+                        if name_pinyin.startswith(query_pinyin[:2]):
+                            is_match = True
+                            match_type = "拼音前两个字匹配"
+
+                    # 拼音后两个字匹配
+                    if not is_match and len(name_pinyin) >= 2 and len(query_pinyin) >= 2:
+                        if name_pinyin.endswith(query_pinyin[-2:]):
+                            is_match = True
+                            match_type = "拼音后两个字匹配"
+
+                    # 拼音包含匹配
+                    if not is_match and query_pinyin in name_pinyin:
+                        is_match = True
+                        match_type = "拼音包含匹配"
+
+                if is_match:
+                    match_info = person_data.copy()
+                    match_info["match_type"] = match_type
+                    match_info["search_score"] = self._calculate_match_score(name, query_clean, match_type)
+                    if has_chinese and PYPINYIN_AVAILABLE:
+                        match_info["pinyin"] = self._get_pinyin(name)
+                    matches.append(match_info)
+
+            # 按匹配分数排序
+            matches.sort(key=lambda x: x["search_score"], reverse=True)
+
+            if matches:
+                return {
+                    "success": True,
+                    "data": matches,
+                    "count": len(matches),
+                    "message": f"找到 {len(matches)} 条匹配记录"
+                }
+            else:
+                return {"success": False, "error": f"未找到与 '{query}' 匹配的信息"}
+
+        except Exception as e:
+            return {"success": False, "error": f"搜索失败: {str(e)}"}
+
+    def _calculate_match_score(self, name: str, query: str, match_type: str) -> int:
+        """计算匹配分数"""
+        score = 0
+
+        if match_type == "前两个字匹配":
+            score = 100
+        elif match_type == "后两个字匹配":
+            score = 80
+        elif match_type == "包含匹配":
+            score = 60
+        elif match_type == "拼音前两个字匹配":
+            score = 95
+        elif match_type == "拼音后两个字匹配":
+            score = 75
+        elif match_type == "拼音包含匹配":
+            score = 55
+
+        # 如果是完全匹配，额外加分
+        if name == query:
+            score += 20
+
+        # 长度匹配度加分
+        if len(name) == len(query):
+            score += 10
+
+        return score
+
+    def _get_pinyin(self, text: str) -> str:
+        """将中文转换为拼音"""
+        if not PYPINYIN_AVAILABLE:
+            return ""
+
+        try:
+            # 转换为拼音，不带声调，合并为字符串
+            pinyin_list = pinyin(text, style=Style.NORMAL)
+            return ''.join([item[0] for item in pinyin_list]).lower()
+        except Exception:
+            return ""
+
+    def _is_chinese_char(self, char: str) -> bool:
+        """检查字符是否为中文"""
+        return '\u4e00' <= char <= '\u9fff'
     
     def list_all_persons(self) -> Dict:
         """列出所有个人信息"""
@@ -291,6 +425,18 @@ def main():
                                 }
                             },
                             {
+                                "name": "search_persons",
+                                "description": "模糊搜索个人信息，支持前两个字匹配、后两个字匹配",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "query": {"type": "string", "description": "搜索关键词（至少2个字符）"},
+                                        "search_type": {"type": "string", "description": "搜索类型（默认为fuzzy）", "default": "fuzzy"}
+                                    },
+                                    "required": ["query"]
+                                }
+                            },
+                            {
                                 "name": "list_all_persons",
                                 "description": "列出所有已存储的个人信息",
                                 "inputSchema": {
@@ -357,7 +503,13 @@ def main():
                     
                 elif tool_name == "get_person":
                     result = manager.get_person(arguments.get("name"))
-                    
+
+                elif tool_name == "search_persons":
+                    result = manager.search_persons(
+                        arguments.get("query"),
+                        arguments.get("search_type", "fuzzy")
+                    )
+
                 elif tool_name == "list_all_persons":
                     result = manager.list_all_persons()
                     
